@@ -1,0 +1,80 @@
+# Target 2 — opaque name. Per-tracker persona probe.
+#
+# Required repo secrets:
+#   - TARGET_2_LIST_URL     read-only tracker list endpoint
+#   - TARGET_2_REPORT_URL   per-tracker per-persona ingest endpoint
+#   - TARGET_2_TOKEN        bearer for X-Internal-Auth header
+
+name: target-2
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every 30min — sample-based, less aggressive than target-1
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe per-tracker personas
+        env:
+          TOKEN: ${{ secrets.TARGET_2_TOKEN }}
+          LIST_URL: ${{ secrets.TARGET_2_LIST_URL }}
+          REPORT_URL: ${{ secrets.TARGET_2_REPORT_URL }}
+        run: |
+          set -euo pipefail
+
+          # 1. Pull active tracker list.
+          LIST=$(curl -fsS -H "X-Internal-Auth: $TOKEN" "$LIST_URL")
+          TRACKER_COUNT=$(echo "$LIST" | jq '.trackers | length')
+          if [ "$TRACKER_COUNT" = "0" ]; then
+            echo "No active trackers to probe."
+            exit 0
+          fi
+
+          # 2. Probe each tracker with 4 personas. UA strings approximate
+          #    what FB's bot/AI/crawler/reviewer present to a target page.
+          UA_HUMAN='Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126 Mobile/15E148 Safari/604.1'
+          UA_BOT='Mozilla/5.0 (compatible; HeadlessChrome/124.0.0.0) AppleWebKit/537.36'
+          UA_FB_CRAWLER='facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+          UA_FB_AD_REVIEW='Mozilla/5.0 (compatible; meta-externalagent/1.1; +https://developers.facebook.com/docs/sharing/webmasters/crawler)'
+
+          REPORTS='[]'
+          while read -r row; do
+            TID=$(echo "$row" | jq -r '.tracker_id')
+            CLOAK=$(echo "$row" | jq -r '.cloak_url')
+            now=$(date +%s)
+
+            for persona in human bot fb_crawler fb_ad_review; do
+              case "$persona" in
+                human) ua="$UA_HUMAN" ;;
+                bot) ua="$UA_BOT" ;;
+                fb_crawler) ua="$UA_FB_CRAWLER" ;;
+                fb_ad_review) ua="$UA_FB_AD_REVIEW" ;;
+              esac
+              hdrs=$(curl -sI --max-time 8 --connect-timeout 4 -A "$ua" "$CLOAK" 2>/dev/null || true)
+              status=$(echo "$hdrs" | awk 'NR==1{print $2}')
+              location=$(echo "$hdrs" | awk 'tolower($1)=="location:"{print $2; exit}' | tr -d '\r')
+              err_field="null"
+              REPORTS=$(echo "$REPORTS" | jq \
+                --argjson tid "$TID" \
+                --arg p "$persona" \
+                --argjson s "${status:-0}" \
+                --arg l "${location:-}" \
+                --argjson e "$err_field" \
+                --argjson t "$now" \
+                '. + [{trackerId: $tid, persona: $p, status: $s, location: $l, error: $e, checkedAt: $t}]')
+            done
+          done < <(echo "$LIST" | jq -c '.trackers[]')
+
+          echo "Payload (truncated):"
+          echo "$REPORTS" | jq '.[0:4]'
+
+          # 3. Report all results in one batch — endpoint groups by tracker.
+          curl -fsS -X POST \
+            -H "X-Internal-Auth: $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --argjson r "$REPORTS" '{reports: $r}')" \
+            "$REPORT_URL"
