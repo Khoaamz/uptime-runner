@@ -54,38 +54,10 @@ jobs:
           fi
           echo "probing ${TRACKER_COUNT} tracker(s) × 4 personas"
 
-          UA_HUMAN='Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126 Mobile/15E148 Safari/604.1'
-          UA_BOT='Mozilla/5.0 (compatible; HeadlessChrome/124.0.0.0) AppleWebKit/537.36'
-          UA_FB_CRAWLER='facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
-          UA_FB_AD_REVIEW='Mozilla/5.0 (compatible; meta-externalagent/1.1; +https://developers.facebook.com/docs/sharing/webmasters/crawler)'
-
-          REPORTS='[]'
-          while read -r row; do
-            TID=$(echo "$row" | jq -r '.tracker_id')
-            CLOAK=$(echo "$row" | jq -r '.cloak_url')
-            now=$(date +%s)
-
-            for persona in human bot fb_crawler fb_ad_review; do
-              case "$persona" in
-                human) ua="$UA_HUMAN" ;;
-                bot) ua="$UA_BOT" ;;
-                fb_crawler) ua="$UA_FB_CRAWLER" ;;
-                fb_ad_review) ua="$UA_FB_AD_REVIEW" ;;
-              esac
-              hdrs=$(curl -sI --max-time 8 --connect-timeout 4 -A "$ua" "$CLOAK" 2>/dev/null || true)
-              status=$(echo "$hdrs" | awk 'NR==1{print $2}')
-              location=$(echo "$hdrs" | awk 'tolower($1)=="location:"{print $2; exit}' | tr -d '\r')
-              err_field="null"
-              REPORTS=$(echo "$REPORTS" | jq \
-                --argjson tid "$TID" \
-                --arg p "$persona" \
-                --argjson s "${status:-0}" \
-                --arg l "${location:-}" \
-                --argjson e "$err_field" \
-                --argjson t "$now" \
-                '. + [{trackerId: $tid, persona: $p, status: $s, location: $l, error: $e, checkedAt: $t}]')
-            done
-          done < <(echo "$LIST" | jq -c '.trackers[]')
+          # Audit P3 §7 fix (2026-06-27) — probe logic extracted to
+          # lib/persona_probe.sh so target-1 (lib/probe.sh) and target-2
+          # share the same timeout/UA/redirect parsing.
+          REPORTS=$(echo "$LIST" | jq -c '.trackers[]' | ./lib/persona_probe.sh)
 
           # Don't echo REPORTS — it contains cloak URLs + Location values.
           set +e
