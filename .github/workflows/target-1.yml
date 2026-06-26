@@ -1,0 +1,42 @@
+# Target 1 — opaque name. URLs + token live in repo secrets so the
+# workflow YAML reveals nothing about which service is being probed.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   - TARGET_1_LIST_URL     read-only endpoint returning {ok, domains:[{domain, …}]}
+#   - TARGET_1_REPORT_URL   ingest endpoint accepting {checks:[{host, status, …}]}
+#   - TARGET_1_TOKEN        bearer for the X-Internal-Auth header
+
+name: target-1
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe
+        env:
+          TOKEN: ${{ secrets.TARGET_1_TOKEN }}
+          LIST_URL: ${{ secrets.TARGET_1_LIST_URL }}
+          REPORT_URL: ${{ secrets.TARGET_1_REPORT_URL }}
+        run: |
+          set -euo pipefail
+          DOMAINS=$(curl -fsS \
+            -H "X-Internal-Auth: $TOKEN" \
+            "$LIST_URL" \
+            | jq -r '.domains[] | .domain')
+          if [ -z "$DOMAINS" ]; then
+            echo "No targets. Nothing to probe."
+            exit 0
+          fi
+          CHECKS=$(./lib/probe.sh $DOMAINS)
+          curl -fsS -X POST \
+            -H "X-Internal-Auth: $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --argjson c "$CHECKS" '{checks: $c}')" \
+            "$REPORT_URL"
