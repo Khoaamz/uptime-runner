@@ -30,7 +30,9 @@ jobs:
           if [ -z "${LIST_URL:-}" ]; then echo "stage=preflight code=missing_list_url"; exit 10; fi
           if [ -z "${REPORT_URL:-}" ]; then echo "stage=preflight code=missing_report_url"; exit 11; fi
           if [ -z "${TOKEN:-}" ]; then echo "stage=preflight code=missing_token"; exit 12; fi
-          echo "preflight ok (list_len=${#LIST_URL} report_len=${#REPORT_URL} token_len=${#TOKEN})"
+          # Audit §8 fix (2026-06-27): keep success log minimal — env lengths
+          # were not a direct secret leak but public logs don't need them.
+          echo "preflight ok"
 
           # Silent run — public-repo workflow logs must not leak tracker
           # IDs, cloak URLs, money URLs, or partner names. Counts only.

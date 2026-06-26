@@ -63,9 +63,14 @@ uptime-runner/
    secret names.
 4. Commit + push. First scheduled run fires inside 15 minutes.
 
-## Contract the target service must implement
+## Contracts — two distinct target shapes
 
-**List endpoint** (read-only, no mutation):
+This repo currently runs two unrelated probe contracts. Each target
+YAML implements ONE; do not mix.
+
+### Contract A — domain/partner uptime probe (`target-1.yml`)
+
+**LIST endpoint** (read-only, no mutation):
 
 ```http
 GET <LIST_URL>
@@ -81,7 +86,7 @@ X-Internal-Auth: <TOKEN>
 }
 ```
 
-**Report endpoint** (writes audit + decides alerts):
+**REPORT endpoint**:
 
 ```http
 POST <REPORT_URL>
@@ -102,8 +107,55 @@ Content-Type: application/json
 }
 ```
 
-Report response should be 5xx on persistent write failure so the
-runner job fails red. Token gate enforced by target.
+### Contract B — per-tracker persona probe (`target-2.yml`)
+
+**LIST endpoint** (read-only, returns active trackers + cloak URLs):
+
+```http
+GET <LIST_URL>
+X-Internal-Auth: <TOKEN>
+
+200 OK
+{
+  "ok": true,
+  "trackers": [
+    {
+      "tracker_id": <int>,
+      "tracker_name": "<str>",
+      "cloak_url": "https://<sub>.<apex>",
+      "money_url": "https://<money-host>/...",
+      "partner_id": <int|null>,
+      "partner_name": "<str|null>"
+    },
+    ...
+  ]
+}
+```
+
+**REPORT endpoint** — per-tracker per-persona verdict ingest:
+
+```http
+POST <REPORT_URL>
+X-Internal-Auth: <TOKEN>
+Content-Type: application/json
+
+{
+  "reports": [
+    {
+      "trackerId": <int>,
+      "persona": "human" | "bot" | "fb_crawler" | "fb_ad_review",
+      "status": <int>,
+      "location": "<str>",
+      "error": <null|str>,
+      "checkedAt": <unix>
+    },
+    ...
+  ]
+}
+```
+
+Both contracts share: 5xx response on persistent write failure so the
+runner job fails red, token gate enforced by target.
 
 ## Schedule cost
 
